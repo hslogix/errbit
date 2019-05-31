@@ -13,7 +13,7 @@ Fabricator :gtalk_notification_service, from: :notification_service, class_name:
 end
 
 Fabricator :slack_notification_service, from: :notification_service, class_name: "NotificationServices::SlackService" do
-  service_url { sequence :word }
+  api_token { sequence :word }
   room_id { sequence(:room_id) { |i| "#room-#{i}" } }
 end
 

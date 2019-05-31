@@ -1,27 +1,27 @@
 class NotificationServices::SlackService < NotificationService
-  CHANNEL_NAME_REGEXP = /^#[a-z\d_-]+$/
+  CHANNEL_NAME_REGEXP = /^[#:a-z\d_, -]+$/
   LABEL = "slack"
-  FIELDS += [
-    [:service_url, {
-      placeholder: 'Slack Hook URL (https://hooks.slack.com/services/XXXXXXXXX/XXXXXXXXX/XXXXXXXXX)',
-      label:       'Hook URL'
+  FIELDS = [
+    [:api_token, {
+      placeholder: 'xoxp-XXXXXXXXXX-XXXXXXXXXX-XXXXXXXXXXXX-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+      label:       'Slack OAuth Access Token'
     }],
     [:room_id, {
-      placeholder: '#general',
-      label:       'Notification channel',
-      hint:        'If empty Errbit will use the default channel for the webook'
+      placeholder: 'production:#general, #errbit',
+      label:       'Notification channel(s)',
+      hint:        'Label per-environment channels (e.g. production:#general will send production notifications to #general). All other notifications are sent to unlabelled channel (e.g. #errbit).'
     }]
   ]
+  API_URL = 'https://slack.com/api/chat.postMessage'
 
-  # Make room_id optional in case users want to use the default channel
-  # setup on Slack when creating the webhook
   def check_params
-    if service_url.blank?
-      errors.add :service_url, "You must specify your Slack Hook url"
+    if api_token.blank?
+      errors.add :api_token, "You must specify your Slack token"
     end
-
-    if room_id.present? && !CHANNEL_NAME_REGEXP.match(room_id)
-      errors.add :room_id, "Slack channel name must be lowercase, with no space, special character, or periods."
+    if room_id.blank?
+      errors.add :room_id, "You must specify your Slack room(s)."
+    elsif !CHANNEL_NAME_REGEXP.match(room_id)
+      errors.add :room_id, "Slack channel names must be lowercase, with no special characters or periods."
     end
   end
 
@@ -33,7 +33,7 @@ class NotificationServices::SlackService < NotificationService
     {
       username:    "Errbit",
       icon_url:    "https://raw.githubusercontent.com/errbit/errbit/master/docs/notifications/slack/errbit.png",
-      channel:     room_id,
+      channel:     channel_for(problem.environment),
       attachments: [
         {
           fallback:   message_for_slack(problem),
@@ -45,21 +45,34 @@ class NotificationServices::SlackService < NotificationService
           fields:     post_payload_fields(problem)
         }
       ]
-    }.compact.to_json # compact to remove empty channel in case it wasn't selected by user
+    }
   end
 
   def create_notification(problem)
+    return unless channel_for(problem.environment)
+
     HTTParty.post(
-      service_url,
-      body:    post_payload(problem),
+      API_URL,
+      body:    post_payload(problem).to_json,
       headers: {
-        'Content-Type' => 'application/json'
+        'Content-Type' => 'application/json; charset=utf-8',
+        'Authorization' => "Bearer #{api_token}"
       }
     )
   end
 
   def configured?
-    service_url.present?
+    api_token.present?
+  end
+
+  def channel_for(environment)
+    list = room_id.split(/\s*,\s*/)
+    default = list.reject { |c| c.match(':') }.first
+    lookup = list
+             .select { |c| c.match(':') }
+             .map { |c| c.split(/\s*:\s*/) }
+             .to_h
+    lookup.fetch(environment, default)
   end
 
 private
