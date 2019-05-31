@@ -11,17 +11,18 @@ describe NotificationServices::SlackService, type: 'model' do
   end
   let(:notice) { Fabricate :notice, backtrace: backtrace }
   let(:problem) { notice.problem }
-  let(:service_url) do
-    "https://hooks.slack.com/services/XXXXXXXXX/XXXXXXXXX/XXXXXXXXX"
+  let(:api_token) do
+    "xoxp-XXXXXXXXX-XXXXXXXXX-XXXXXXXXX"
   end
   let(:service) do
     Fabricate :slack_notification_service, app:         notice.app,
-                                           service_url: service_url,
+                                           api_token:   api_token,
                                            room_id:     room_id
   end
   let(:room_id) do
     "#general"
   end
+  let(:slack_channel) { room_id }
   let(:backtrace_lines) do
     lines = "/path/to/file/1.rb:22 → first_method\n" \
             "/path/to/file/2.rb:44 → second_method\n" \
@@ -36,7 +37,7 @@ describe NotificationServices::SlackService, type: 'model' do
     {
       username:    "Errbit",
       icon_url:    "https://raw.githubusercontent.com/errbit/errbit/master/docs/notifications/slack/errbit.png",
-      channel:     room_id,
+      channel:     slack_channel,
       attachments: [
         {
           fallback:   service.message_for_slack(problem),
@@ -82,17 +83,17 @@ describe NotificationServices::SlackService, type: 'model' do
   end
 
   context 'Validations' do
-    it 'validates presence of service_url' do
-      service.service_url = ""
+    it 'validates presence of api_token' do
+      service.api_token = ""
       service.valid?
 
-      expect(service.errors[:service_url]).
-        to include("You must specify your Slack Hook url")
+      expect(service.errors[:api_token]).
+        to include("You must specify your Slack token")
 
-      service.service_url = service_url
+      service.api_token = api_token
       service.valid?
 
-      expect(service.errors[:service_url]).to be_blank
+      expect(service.errors[:api_token]).to be_blank
     end
 
     it 'validates format of room_id' do
@@ -100,7 +101,7 @@ describe NotificationServices::SlackService, type: 'model' do
       service.valid?
 
       expect(service.errors[:room_id]).
-        to include("Slack channel name must be lowercase, with no space, special character, or periods.")
+        to include("Slack channel names must be lowercase, with no special characters or periods.")
 
       service.room_id = "#valid-room-name"
       service.valid?
@@ -114,24 +115,60 @@ describe NotificationServices::SlackService, type: 'model' do
       payload = payload_hash.to_json
 
       expect(HTTParty).to receive(:post).
-        with(service.service_url, body: payload, headers: { "Content-Type" => "application/json" }).
+        with(
+          NotificationServices::SlackService::API_URL,
+          body: payload,
+          headers: {
+            "Content-Type" => "application/json; charset=utf-8",
+            "Authorization" => "Bearer #{api_token}"
+          }
+        ).
         and_return(true)
 
       service.create_notification(problem)
     end
   end
 
-  context 'without room_id' do
-    let(:room_id) { nil }
+  context 'with named and default slack channels' do
+    let(:room_id) { "staging:#staging-channel, #default" }
 
-    it "should send a notification to Slack with hook url and without channel" do
-      payload = payload_hash.except(:channel).to_json
+    context 'unnamed environment' do
+      let(:payload) { service.post_payload(problem) }
+      it "should send to the default channel" do
+        expect(payload[:channel]).to eql '#default'
+      end
+    end
 
-      expect(HTTParty).to receive(:post).
-        with(service.service_url, body: payload, headers: { "Content-Type" => "application/json" }).
-        and_return(true)
+    context 'named environment' do
+      before { problem.environment = 'staging' }
+      let(:payload) { service.post_payload(problem) }
+      it "should send to the named channel" do
+        expect(payload[:channel]).to eql '#staging-channel'
+      end
+    end
+  end
 
-      service.create_notification(problem)
+  context 'with only named slack channels' do
+    let(:room_id) { "staging:#staging-channel, beta:#errbit" }
+
+    context 'unnamed environment' do
+      it "should not send notifications" do
+        expect(HTTParty).to_not receive(:post)
+        service.create_notification(problem)
+      end
+    end
+
+    context 'named environment' do
+      let (:slack_channel) { '#staging-channel' }
+
+      it "should send a notification" do
+        payload = payload_hash.to_json
+
+        expect(HTTParty).to receive(:post).and_return(true)
+
+        problem.environment = 'staging'
+        service.create_notification(problem)
+      end
     end
   end
 end
